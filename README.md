@@ -2,6 +2,8 @@
 
 This package provides a **Vercel AI SDK v6 provider** for Apple Intelligence using a **pluggable transport**. It does **not** ship any native binaries.
 
+Companion Tauri bridge crate: https://github.com/entro314-labs/tauri-apple-intelligence
+
 ## Why a transport?
 
 Apple Intelligence runs on-device and requires macOS 26+ on Apple Silicon. Different runtimes (Tauri, Node, etc.) need different bridges. This SDK keeps the provider logic reusable while the transport does platform-specific work.
