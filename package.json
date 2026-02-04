@@ -1,0 +1,61 @@
+{
+  "name": "@entro314labs/apple-intelligence-sdk",
+  "version": "0.2.1",
+  "description": "Apple Intelligence provider for the Vercel AI SDK with pluggable transports (Tauri, Node, etc.)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/entro314-labs/apple-intelligence-sdk.git"
+  },
+  "homepage": "https://github.com/entro314-labs/apple-intelligence-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/entro314-labs/apple-intelligence-sdk/issues"
+  },
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@ai-sdk/provider": "^3.0.7",
+    "@ai-sdk/provider-utils": "^4.0.13",
+    "@tauri-apps/api": "^2.10.1",
+    "json-schema": "^0.4.0"
+  },
+  "peerDependencies": {
+    "ai": "^6.0.69"
+  },
+  "devDependencies": {
+    "rimraf": "^6.1.2",
+    "tsdown": "^0.20.1",
+    "typescript": "^5.9.3"
+  },
+  "keywords": [
+    "apple",
+    "apple-intelligence",
+    "vercel-ai-sdk",
+    "tauri",
+    "on-device",
+    "provider"
+  ],
+  "license": "MIT"
+}

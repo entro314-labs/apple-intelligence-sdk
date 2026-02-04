@@ -1,0 +1,10 @@
+node_modules
+dist
+*.log
+.DS_Store
+.env
+.env.local
+coverage
+*.tsbuildinfo
+IMPLEMENTATION.md
+UI_INTEGRATION_PLAN.md
