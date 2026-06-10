@@ -150,6 +150,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
             temperature: this.settings.temperature,
             maxTokens: options.maxOutputTokens ?? this.settings.maxTokens,
             stopAfterToolCalls: true,
+            abortSignal: options.abortSignal,
           })
         )
       : this.createStreamFromChunks(
@@ -157,6 +158,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
             messages,
             temperature: this.settings.temperature,
             maxTokens: options.maxOutputTokens ?? this.settings.maxTokens,
+            abortSignal: options.abortSignal,
           })
         );
 

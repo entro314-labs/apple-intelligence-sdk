@@ -67,6 +67,12 @@ export type AppleIntelligenceStreamOptions = {
   temperature?: number;
   maxTokens?: number;
   stopAfterToolCalls?: boolean;
+  /**
+   * Aborting this signal cancels the in-flight on-device generation (the transport calls the
+   * host's cancel API). The stream then ends with a normal `done` event. Without it, a superseded
+   * generation keeps running to completion — wasted inference for typing-driven consumers.
+   */
+  abortSignal?: AbortSignal;
 };
 
 export interface AppleIntelligenceTransport {
