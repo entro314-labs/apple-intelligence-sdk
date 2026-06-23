@@ -35,6 +35,32 @@ export type AppleIntelligenceProviderSettings = {
   generateId?: () => string;
 };
 
+/**
+ * Build an empty {@link LanguageModelV3Usage}.
+ *
+ * Apple Intelligence runs on-device and does not report token counts, so every
+ * field is `undefined`. The shape MUST be the nested LanguageModelV3/V4 usage
+ * (`inputTokens.total`, `outputTokens.total`) — the AI SDK's `asLanguageModelUsage`
+ * reads `usage.inputTokens.total`, so emitting the older flat shape
+ * (`inputTokens: undefined`) throws "Cannot read properties of undefined". A fresh
+ * object is returned per call so a consumer can never mutate shared state.
+ */
+function createEmptyUsage(): LanguageModelV3Usage {
+  return {
+    inputTokens: {
+      total: undefined,
+      noCache: undefined,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+    },
+    outputTokens: {
+      total: undefined,
+      text: undefined,
+      reasoning: undefined,
+    },
+  };
+}
+
 export interface AppleIntelligenceProvider {
   (
     modelId: AppleIntelligenceModelId,
@@ -216,7 +242,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
           },
         ],
         finishReason: { unified: "stop", raw: "stop" },
-        usage: this.emptyUsage(),
+        usage: createEmptyUsage(),
         warnings: [],
       };
     }
@@ -224,7 +250,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
     return {
       content: [{ type: "text", text: result.text ?? "" }],
       finishReason: { unified: "stop", raw: "stop" },
-      usage: this.emptyUsage(),
+      usage: createEmptyUsage(),
       warnings: [],
     };
   }
@@ -263,7 +289,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
       return {
         content: toolCallContent,
         finishReason: { unified: "tool-calls", raw: "tool-calls" },
-        usage: this.emptyUsage(),
+        usage: createEmptyUsage(),
         warnings: [],
       };
     }
@@ -271,7 +297,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
     return {
       content: [{ type: "text", text: result.text ?? "" }],
       finishReason: { unified: "stop", raw: "stop" },
-      usage: this.emptyUsage(),
+      usage: createEmptyUsage(),
       warnings: [],
     };
   }
@@ -503,11 +529,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
             finishReason: hasToolCalls
               ? { unified: "tool-calls", raw: "tool-calls" }
               : { unified: "stop", raw: "stop" },
-            usage: {
-              inputTokens: undefined,
-              outputTokens: undefined,
-              totalTokens: undefined,
-            },
+            usage: createEmptyUsage(),
           });
           controller.close();
         } catch (err) {
@@ -553,11 +575,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
           controller.enqueue({
             type: "finish",
             finishReason: { unified: "stop", raw: "stop" },
-            usage: {
-              inputTokens: undefined,
-              outputTokens: undefined,
-              totalTokens: undefined,
-            },
+            usage: createEmptyUsage(),
           });
           controller.close();
         } catch (err) {
@@ -565,13 +583,5 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
         }
       },
     });
-  }
-
-  private emptyUsage(): LanguageModelV3Usage {
-    return {
-      inputTokens: undefined,
-      outputTokens: undefined,
-      totalTokens: undefined,
-    };
   }
 }

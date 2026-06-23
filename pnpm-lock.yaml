@@ -18,8 +18,8 @@ importers:
         specifier: ^2.11.1
         version: 2.11.1
       ai:
-        specifier: ^6.0.209
-        version: 6.0.209(zod@4.3.6)
+        specifier: 7.0.0-beta.184
+        version: 7.0.0-beta.184(zod@4.3.6)
       json-schema:
         specifier: ^0.4.0
         version: 0.4.0
@@ -36,15 +36,9 @@ importers:
 
 packages:
 
-  '@ai-sdk/gateway@3.0.134':
-    resolution: {integrity: sha512-PfUkQp01EihEyNM6e+nexXmVANiY5KcHMui/MmaHsC4KVVQYh/MwPeOsD3bTPu63e581BKO+AwaPPNmD4x943A==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      zod: ^3.25.76 || ^4.1.8
-
-  '@ai-sdk/provider-utils@4.0.30':
-    resolution: {integrity: sha512-VO7I+vPffqI5sMnPoUq5DCSqKIgQIk/naJWRdQVpz2ma2zoprC/lqiJiUEl2s6DfvTD76TbhD3q39ROjlA6rGw==}
-    engines: {node: '>=18'}
+  '@ai-sdk/gateway@4.0.0-beta.112':
+    resolution: {integrity: sha512-bPq7JX0MvqlhpxIlXj0t4DQdM1zpVjeoMrdcrj0NZyUYgDP2+tnnEKpJnt7ffA2K0HOBgQ9XuWcs7P7rScJsVA==}
+    engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
@@ -53,10 +47,6 @@ packages:
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
-
-  '@ai-sdk/provider@3.0.10':
-    resolution: {integrity: sha512-Q3BZ27qfpYqnCYGvE3vt+Qi6LGOF9R5Nmzn+9JoM1lCRsD9mYaIhfJLkSunN48nfGXJ6n+XNV0J/XVpqGQl7Dw==}
-    engines: {node: '>=18'}
 
   '@ai-sdk/provider@4.0.0-beta.20':
     resolution: {integrity: sha512-xW/ASShhkKWL+D/ynwJehJgelQIxebhx4UO3fFLmkcDAK+h30mBfgeXIHlduJ3IZCh5iH9xFTF4PcMuQqUcb+g==}
@@ -110,10 +100,6 @@ packages:
     peerDependencies:
       '@emnapi/core': ^1.7.1
       '@emnapi/runtime': ^1.7.1
-
-  '@opentelemetry/api@1.9.1':
-    resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
-    engines: {node: '>=8.0.0'}
 
   '@oxc-project/types@0.137.0':
     resolution: {integrity: sha512-WT+Gb24i8hmvo85AIv2oEYouEXkRlKAlT9WaCa3TfLgNCN+GhrJOGZuIlMouAh38Qe4QOx26eUOVsq70qXrywA==}
@@ -361,9 +347,9 @@ packages:
   '@workflow/serde@4.1.0':
     resolution: {integrity: sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ==}
 
-  ai@6.0.209:
-    resolution: {integrity: sha512-NE7uErmxOe+i77BPT1+AhW4wr7xzilbQLsKVmvGEyil5AjaF6C/m92hlPI4Xwtnv5n77D/29bizwcR27/S/gSQ==}
-    engines: {node: '>=18'}
+  ai@7.0.0-beta.184:
+    resolution: {integrity: sha512-dKERGwLVGJ9qWtADIusqNxoyWMipQQxUUOqINTVKkH5GReOPhMr6Hx263a1CAVoFudyHG8OzxuDN4I9H9z72tA==}
+    engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
@@ -577,18 +563,11 @@ packages:
 
 snapshots:
 
-  '@ai-sdk/gateway@3.0.134(zod@4.3.6)':
+  '@ai-sdk/gateway@4.0.0-beta.112(zod@4.3.6)':
     dependencies:
-      '@ai-sdk/provider': 3.0.10
-      '@ai-sdk/provider-utils': 4.0.30(zod@4.3.6)
+      '@ai-sdk/provider': 4.0.0-beta.20
+      '@ai-sdk/provider-utils': 5.0.0-beta.50(zod@4.3.6)
       '@vercel/oidc': 3.2.0
-      zod: 4.3.6
-
-  '@ai-sdk/provider-utils@4.0.30(zod@4.3.6)':
-    dependencies:
-      '@ai-sdk/provider': 3.0.10
-      '@standard-schema/spec': 1.1.0
-      eventsource-parser: 3.1.0
       zod: 4.3.6
 
   '@ai-sdk/provider-utils@5.0.0-beta.50(zod@4.3.6)':
@@ -598,10 +577,6 @@ snapshots:
       '@workflow/serde': 4.1.0
       eventsource-parser: 3.1.0
       zod: 4.3.6
-
-  '@ai-sdk/provider@3.0.10':
-    dependencies:
-      json-schema: 0.4.0
 
   '@ai-sdk/provider@4.0.0-beta.20':
     dependencies:
@@ -665,8 +640,6 @@ snapshots:
       '@emnapi/runtime': 1.11.1
       '@tybys/wasm-util': 0.10.3
     optional: true
-
-  '@opentelemetry/api@1.9.1': {}
 
   '@oxc-project/types@0.137.0': {}
 
@@ -802,12 +775,11 @@ snapshots:
 
   '@workflow/serde@4.1.0': {}
 
-  ai@6.0.209(zod@4.3.6):
+  ai@7.0.0-beta.184(zod@4.3.6):
     dependencies:
-      '@ai-sdk/gateway': 3.0.134(zod@4.3.6)
-      '@ai-sdk/provider': 3.0.10
-      '@ai-sdk/provider-utils': 4.0.30(zod@4.3.6)
-      '@opentelemetry/api': 1.9.1
+      '@ai-sdk/gateway': 4.0.0-beta.112(zod@4.3.6)
+      '@ai-sdk/provider': 4.0.0-beta.20
+      '@ai-sdk/provider-utils': 5.0.0-beta.50(zod@4.3.6)
       zod: 4.3.6
 
   ansis@4.3.1: {}
