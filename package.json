@@ -1,6 +1,6 @@
 {
   "name": "@entro314labs/apple-intelligence-sdk",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Apple Intelligence provider for the Vercel AI SDK with pluggable transports (Tauri, Node, etc.)",
   "repository": {
     "type": "git",
@@ -13,12 +13,17 @@
   "type": "module",
   "main": "dist/index.cjs",
   "module": "dist/index.mjs",
-  "types": "dist/index.d.ts",
+  "types": "dist/index.d.cts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
   "sideEffects": false,
