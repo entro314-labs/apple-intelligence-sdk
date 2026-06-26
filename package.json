@@ -1,6 +1,6 @@
 {
   "name": "@entro314labs/apple-intelligence-sdk",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "Apple Intelligence provider for the Vercel AI SDK with pluggable transports (Tauri, Node, etc.)",
   "repository": {
     "type": "git",
@@ -41,13 +41,13 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
-    "@ai-sdk/provider": "beta",
-    "@ai-sdk/provider-utils": "beta",
+    "@ai-sdk/provider": "^4.0.0",
+    "@ai-sdk/provider-utils": "^5.0.0",
     "@tauri-apps/api": "^2.11.1",
     "json-schema": "^0.4.0"
   },
   "peerDependencies": {
-    "ai": "7.0.0-beta.184"
+    "ai": "^7.0.2"
   },
   "devDependencies": {
     "rimraf": "^6.1.3",
