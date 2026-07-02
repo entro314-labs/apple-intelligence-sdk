@@ -1,6 +1,6 @@
 {
   "name": "@entro314labs/apple-intelligence-sdk",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Apple Intelligence provider for the Vercel AI SDK with pluggable transports (Tauri, Node, etc.)",
   "repository": {
     "type": "git",

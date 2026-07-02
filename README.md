@@ -72,10 +72,34 @@ const appleAI = createAppleIntelligenceProvider({
 - Streaming text generation
 - Tool calling (multi-step orchestration via AI SDK)
 - Structured output (JSON schema)
+- **Model selection** — `appleAI("apple-on-device")` (fast, ~4k context) or
+  `appleAI("apple-private-cloud")` (macOS 27 Private Cloud Compute, ~32k context, reasoning-capable,
+  still private: no API key, no bill)
+- **Reasoning** — pass `{ reasoningLevel: "light" | "moderate" | "deep" }` to the model settings
+  (reasoning-capable models only)
+- **Multimodal image input** — image file parts on a user message are forwarded to the on-device
+  model as attachments (macOS 27)
+- **Real token usage** — `usage` is reported on generate/stream results (macOS 27), including
+  reasoning tokens
+- **Runtime capability queries** on the transport — `checkPrivateCloudAvailability()`,
+  `getContextInfo(model)`, `getSupportedLanguages()`, `prewarm(model)`
+
+```ts
+const appleAI = createAppleIntelligenceProvider({
+  transport: createTauriAppleIntelligenceTransport(),
+});
+
+// Private Cloud Compute with reasoning:
+const { text } = await generateText({
+  model: appleAI("apple-private-cloud", { reasoningLevel: "moderate" }),
+  prompt: "Explain the tradeoffs of...",
+});
+```
 
 ## Platform constraints
 
-- macOS 26+ (Apple Intelligence)
+- macOS 26+ (Apple Intelligence) for the on-device model, streaming, tools, structured output
+- macOS 27+ for Private Cloud Compute, reasoning, multimodal image input, and per-call token usage
 - Apple Silicon (M1+)
 - Apple Intelligence enabled in system settings
 
