@@ -1,12 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
+  AppleIntelligenceAvailability,
+  AppleIntelligenceContextInfo,
   AppleIntelligenceGenerateOptions,
   AppleIntelligenceGenerateResult,
+  AppleIntelligenceModel,
   AppleIntelligenceStreamEvent,
   AppleIntelligenceStreamOptions,
   AppleIntelligenceTransport,
-  AppleIntelligenceAvailability,
 } from "./transport";
 
 type StreamStart = {
@@ -28,6 +30,24 @@ export function createTauriAppleIntelligenceTransport(
   return {
     async checkAvailability(): Promise<AppleIntelligenceAvailability> {
       return invoke(command("check_availability"));
+    },
+
+    async checkPrivateCloudAvailability(): Promise<AppleIntelligenceAvailability> {
+      return invoke(command("pcc_check_availability"));
+    },
+
+    async getContextInfo(
+      model?: AppleIntelligenceModel
+    ): Promise<AppleIntelligenceContextInfo> {
+      return invoke(command("context_info"), { model });
+    },
+
+    async getSupportedLanguages(): Promise<string[]> {
+      return invoke(command("supported_languages"));
+    },
+
+    async prewarm(model?: AppleIntelligenceModel): Promise<void> {
+      await invoke(command("prewarm"), { model });
     },
 
     async generate(

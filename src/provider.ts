@@ -16,18 +16,31 @@ import { generateId } from "@ai-sdk/provider-utils";
 import type { JSONSchema7 } from "json-schema";
 import type {
   AppleIntelligenceAvailability,
+  AppleIntelligenceImage,
   AppleIntelligenceMessage,
+  AppleIntelligenceModel,
+  AppleIntelligenceReasoningLevel,
   AppleIntelligenceStreamEvent,
   AppleIntelligenceToolDefinition,
   AppleIntelligenceTransport,
+  AppleIntelligenceUsage,
 } from "./transport";
 
-export type AppleIntelligenceModelId = "apple-on-device" | (string & {});
+/**
+ * Model ids. `apple-on-device` is the ~4k-context on-device model; `apple-private-cloud` is the
+ * macOS-27 Private Cloud Compute model (~32k context, reasoning-capable, still private, no API key).
+ */
+export type AppleIntelligenceModelId =
+  | "apple-on-device"
+  | "apple-private-cloud"
+  | (string & {});
 
 export type AppleIntelligenceSettings = {
   temperature?: number;
   maxTokens?: number;
   requireAvailability?: boolean;
+  /** Reasoning effort for reasoning-capable models (Private Cloud Compute). macOS 27+. */
+  reasoningLevel?: AppleIntelligenceReasoningLevel;
 };
 
 export type AppleIntelligenceProviderSettings = {
@@ -59,6 +72,77 @@ function createEmptyUsage(): LanguageModelV3Usage {
       reasoning: undefined,
     },
   };
+}
+
+/**
+ * Map the native Apple Intelligence usage (macOS 27+ reports real token counts) onto the nested
+ * {@link LanguageModelV3Usage} shape. Falls back to the all-`undefined` usage when the host reports
+ * none (macOS 26, which does not surface per-call token counts).
+ */
+function convertUsage(usage?: AppleIntelligenceUsage): LanguageModelV3Usage {
+  if (!usage) {
+    return createEmptyUsage();
+  }
+  const noCache = Math.max(0, usage.inputTokens - usage.cachedInputTokens);
+  const text = Math.max(0, usage.outputTokens - usage.reasoningTokens);
+  return {
+    inputTokens: {
+      total: usage.inputTokens,
+      noCache,
+      cacheRead: usage.cachedInputTokens,
+      cacheWrite: undefined,
+    },
+    outputTokens: {
+      total: usage.outputTokens,
+      text,
+      reasoning: usage.reasoningTokens,
+    },
+  };
+}
+
+function uint8ToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+/**
+ * Convert an AI-SDK file part into an Apple Intelligence image attachment. Local file URLs/paths ride
+ * through as `fileURL` (zero-copy); remote/`data:` URLs and raw bytes become `base64`. Returns `null`
+ * for non-image parts.
+ */
+function toAppleImage(
+  mediaType: string | undefined,
+  data: unknown
+): AppleIntelligenceImage | null {
+  const type = mediaType ?? "image/*";
+  if (!type.startsWith("image/") && type !== "image/*") {
+    return null;
+  }
+  if (data instanceof URL) {
+    return data.protocol === "file:"
+      ? { mediaType: type, fileURL: data.href }
+      : { mediaType: type, fileURL: data.href };
+  }
+  if (typeof data === "string") {
+    const dataUrl = /^data:[^;]+;base64,(.*)$/s.exec(data);
+    if (dataUrl) {
+      return { mediaType: type, base64: dataUrl[1] };
+    }
+    if (data.startsWith("file://") || data.startsWith("/")) {
+      return { mediaType: type, fileURL: data };
+    }
+    return { mediaType: type, base64: data };
+  }
+  if (data instanceof Uint8Array) {
+    return { mediaType: type, base64: uint8ToBase64(data) };
+  }
+  if (data instanceof ArrayBuffer) {
+    return { mediaType: type, base64: uint8ToBase64(new Uint8Array(data)) };
+  }
+  return null;
 }
 
 export interface AppleIntelligenceProvider {
@@ -109,7 +193,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
   readonly modelId: string;
   readonly defaultObjectGenerationMode = "json";
 
-  supportsImageUrls = false;
+  supportsImageUrls = true;
   supportsStructuredOutputs = true;
 
   private readonly settings: AppleIntelligenceSettings;
@@ -125,6 +209,11 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
     this.settings = settings;
     this.transport = providerSettings.transport;
     this.generateId = providerSettings.generateId ?? generateId;
+  }
+
+  /** Which native model backs this model id: `apple-private-cloud` → Private Cloud Compute. */
+  private resolveModel(): AppleIntelligenceModel {
+    return this.modelId === "apple-private-cloud" ? "private-cloud" : "on-device";
   }
 
   supportedUrls:
@@ -168,11 +257,16 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
       ? this.convertTools(options.tools)
       : undefined;
 
+    const model = this.resolveModel();
+    const reasoningLevel = this.settings.reasoningLevel;
+
     const stream = tools?.length
       ? this.createStreamFromEvents(
           this.transport.stream({
             messages,
             tools,
+            model,
+            reasoningLevel,
             temperature: this.settings.temperature,
             maxTokens: options.maxOutputTokens ?? this.settings.maxTokens,
             stopAfterToolCalls: true,
@@ -182,6 +276,8 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
       : this.createStreamFromChunks(
           this.transport.stream({
             messages,
+            model,
+            reasoningLevel,
             temperature: this.settings.temperature,
             maxTokens: options.maxOutputTokens ?? this.settings.maxTokens,
             abortSignal: options.abortSignal,
@@ -229,6 +325,8 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
     const result = await this.transport.generate({
       messages,
       schema,
+      model: this.resolveModel(),
+      reasoningLevel: this.settings.reasoningLevel,
       temperature: this.settings.temperature,
       maxTokens: options.maxOutputTokens ?? this.settings.maxTokens,
     });
@@ -242,7 +340,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
           },
         ],
         finishReason: { unified: "stop", raw: "stop" },
-        usage: createEmptyUsage(),
+        usage: convertUsage(result.usage),
         warnings: [],
       };
     }
@@ -250,7 +348,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
     return {
       content: [{ type: "text", text: result.text ?? "" }],
       finishReason: { unified: "stop", raw: "stop" },
-      usage: createEmptyUsage(),
+      usage: convertUsage(result.usage),
       warnings: [],
     };
   }
@@ -271,6 +369,8 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
     const result = await this.transport.generate({
       messages,
       tools,
+      model: this.resolveModel(),
+      reasoningLevel: this.settings.reasoningLevel,
       temperature: this.settings.temperature,
       maxTokens: options.maxOutputTokens ?? this.settings.maxTokens,
       stopAfterToolCalls: true,
@@ -289,7 +389,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
       return {
         content: toolCallContent,
         finishReason: { unified: "tool-calls", raw: "tool-calls" },
-        usage: createEmptyUsage(),
+        usage: convertUsage(result.usage),
         warnings: [],
       };
     }
@@ -297,7 +397,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
     return {
       content: [{ type: "text", text: result.text ?? "" }],
       finishReason: { unified: "stop", raw: "stop" },
-      usage: createEmptyUsage(),
+      usage: convertUsage(result.usage),
       warnings: [],
     };
   }
@@ -331,16 +431,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
             content: message.content,
           };
         case "user":
-          return {
-            role: "user",
-            content: Array.isArray(message.content)
-              ? message.content
-                  .map((part) =>
-                    part.type === "text" ? part.text : "[unsupported content]"
-                  )
-                  .join("\n")
-              : message.content,
-          };
+          return this.convertUserMessage(message);
         case "assistant":
           return this.convertAssistantMessage(message);
         case "tool":
@@ -352,6 +443,37 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
           };
       }
     });
+  }
+
+  private convertUserMessage(
+    message: Extract<LanguageModelV3Message, { role: "user" }>
+  ): AppleIntelligenceMessage {
+    if (!Array.isArray(message.content)) {
+      return { role: "user", content: message.content };
+    }
+
+    const textParts: string[] = [];
+    const images: AppleIntelligenceImage[] = [];
+    for (const part of message.content) {
+      if (part.type === "text") {
+        textParts.push(part.text);
+      } else if (part.type === "file") {
+        const image = toAppleImage(part.mediaType, part.data);
+        if (image) {
+          images.push(image);
+        } else {
+          textParts.push(`[unsupported content - ${part.mediaType ?? "file"}]`);
+        }
+      } else {
+        textParts.push("[unsupported content]");
+      }
+    }
+
+    return {
+      role: "user",
+      content: textParts.join("\n"),
+      ...(images.length > 0 ? { images } : {}),
+    };
   }
 
   private convertAssistantMessage(
@@ -489,8 +611,11 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
       async start(controller) {
         controller.enqueue({ type: "stream-start", warnings: [] });
         const textId = crypto.randomUUID();
+        const reasoningId = crypto.randomUUID();
         let hasText = false;
+        let hasReasoning = false;
         let hasToolCalls = false;
+        let usage = createEmptyUsage();
 
         try {
           for await (const event of nativeStream) {
@@ -504,6 +629,16 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
                 delta: event.text,
                 id: textId,
               });
+            } else if (event.type === "reasoning") {
+              if (!hasReasoning) {
+                controller.enqueue({ type: "reasoning-start", id: reasoningId });
+                hasReasoning = true;
+              }
+              controller.enqueue({
+                type: "reasoning-delta",
+                delta: event.text,
+                id: reasoningId,
+              });
             } else if (event.type === "tool-call") {
               hasToolCalls = true;
               controller.enqueue({
@@ -512,6 +647,8 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
                 toolName: event.toolName,
                 input: JSON.stringify(event.args),
               });
+            } else if (event.type === "usage") {
+              usage = convertUsage(event.usage);
             } else if (event.type === "error") {
               controller.error(new Error(event.message));
               return;
@@ -520,6 +657,9 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
             }
           }
 
+          if (hasReasoning) {
+            controller.enqueue({ type: "reasoning-end", id: reasoningId });
+          }
           if (hasText) {
             controller.enqueue({ type: "text-end", id: textId });
           }
@@ -529,7 +669,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
             finishReason: hasToolCalls
               ? { unified: "tool-calls", raw: "tool-calls" }
               : { unified: "stop", raw: "stop" },
-            usage: createEmptyUsage(),
+            usage,
           });
           controller.close();
         } catch (err) {
@@ -546,7 +686,10 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
       async start(controller) {
         controller.enqueue({ type: "stream-start", warnings: [] });
         const textId = crypto.randomUUID();
+        const reasoningId = crypto.randomUUID();
         let hasText = false;
+        let hasReasoning = false;
+        let usage = createEmptyUsage();
 
         try {
           for await (const event of stream) {
@@ -560,6 +703,18 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
                 delta: event.text,
                 id: textId,
               });
+            } else if (event.type === "reasoning") {
+              if (!hasReasoning) {
+                controller.enqueue({ type: "reasoning-start", id: reasoningId });
+                hasReasoning = true;
+              }
+              controller.enqueue({
+                type: "reasoning-delta",
+                delta: event.text,
+                id: reasoningId,
+              });
+            } else if (event.type === "usage") {
+              usage = convertUsage(event.usage);
             } else if (event.type === "error") {
               controller.error(new Error(event.message));
               return;
@@ -568,6 +723,9 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
             }
           }
 
+          if (hasReasoning) {
+            controller.enqueue({ type: "reasoning-end", id: reasoningId });
+          }
           if (hasText) {
             controller.enqueue({ type: "text-end", id: textId });
           }
@@ -575,7 +733,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
           controller.enqueue({
             type: "finish",
             finishReason: { unified: "stop", raw: "stop" },
-            usage: createEmptyUsage(),
+            usage,
           });
           controller.close();
         } catch (err) {
