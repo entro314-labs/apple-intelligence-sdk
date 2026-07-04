@@ -1,6 +1,7 @@
 export type {
   AppleIntelligenceAvailability,
   AppleIntelligenceContextInfo,
+  AppleIntelligenceErrorCode,
   AppleIntelligenceGenerateOptions,
   AppleIntelligenceGenerateResult,
   AppleIntelligenceImage,
@@ -10,9 +11,15 @@ export type {
   AppleIntelligenceStreamEvent,
   AppleIntelligenceStreamOptions,
   AppleIntelligenceToolCall,
+  AppleIntelligenceToolChoice,
   AppleIntelligenceToolDefinition,
   AppleIntelligenceTransport,
   AppleIntelligenceUsage,
+} from "./transport";
+
+export {
+  AppleIntelligenceGenerationError,
+  toAppleIntelligenceError,
 } from "./transport";
 
 export type { TauriAppleIntelligenceTransportOptions } from "./tauri";

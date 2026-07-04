@@ -10,6 +10,7 @@ import type {
   AppleIntelligenceStreamOptions,
   AppleIntelligenceTransport,
 } from "./transport";
+import { toAppleIntelligenceError } from "./transport";
 
 type StreamStart = {
   streamId: string;
@@ -42,18 +43,34 @@ export function createTauriAppleIntelligenceTransport(
       return invoke(command("context_info"), { model });
     },
 
+    async tokenCount(
+      text: string,
+      model?: AppleIntelligenceModel
+    ): Promise<number> {
+      return invoke(command("token_count"), { model, text });
+    },
+
     async getSupportedLanguages(): Promise<string[]> {
       return invoke(command("supported_languages"));
     },
 
-    async prewarm(model?: AppleIntelligenceModel): Promise<void> {
-      await invoke(command("prewarm"), { model });
+    async prewarm(
+      model?: AppleIntelligenceModel,
+      promptPrefix?: string
+    ): Promise<void> {
+      await invoke(command("prewarm"), { model, promptPrefix });
     },
 
     async generate(
       request: AppleIntelligenceGenerateOptions
     ): Promise<AppleIntelligenceGenerateResult> {
-      return invoke(command("generate"), { request });
+      try {
+        return await invoke(command("generate"), { request });
+      } catch (reason) {
+        // Tauri rejects with the serialized plugin error; surface typed generation failures
+        // (context-window-exceeded, guardrail-violation, ...) as AppleIntelligenceGenerationError.
+        throw toAppleIntelligenceError(reason);
+      }
     },
 
     async *stream(

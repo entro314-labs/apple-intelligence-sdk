@@ -1,30 +1,30 @@
 import type {
-  LanguageModelV3,
-  LanguageModelV3CallOptions,
-  LanguageModelV3Content,
-  LanguageModelV3FinishReason,
-  LanguageModelV3Message,
-  LanguageModelV3ResponseMetadata,
-  LanguageModelV3StreamPart,
-  LanguageModelV3ToolResultOutput,
-  LanguageModelV3Usage,
-  SharedV3Headers,
-  SharedV3ProviderMetadata,
-  SharedV3Warning,
+  LanguageModelV4,
+  LanguageModelV4CallOptions,
+  LanguageModelV4Content,
+  LanguageModelV4FinishReason,
+  LanguageModelV4GenerateResult,
+  LanguageModelV4Message,
+  LanguageModelV4StreamPart,
+  LanguageModelV4StreamResult,
+  LanguageModelV4ToolResultOutput,
+  LanguageModelV4Usage,
+  SharedV4Warning,
 } from "@ai-sdk/provider";
 import { generateId } from "@ai-sdk/provider-utils";
 import type { JSONSchema7 } from "json-schema";
 import type {
-  AppleIntelligenceAvailability,
   AppleIntelligenceImage,
   AppleIntelligenceMessage,
   AppleIntelligenceModel,
   AppleIntelligenceReasoningLevel,
   AppleIntelligenceStreamEvent,
+  AppleIntelligenceToolChoice,
   AppleIntelligenceToolDefinition,
   AppleIntelligenceTransport,
   AppleIntelligenceUsage,
 } from "./transport";
+import { AppleIntelligenceGenerationError } from "./transport";
 
 /**
  * Model ids. `apple-on-device` is the ~4k-context on-device model; `apple-private-cloud` is the
@@ -39,7 +39,12 @@ export type AppleIntelligenceSettings = {
   temperature?: number;
   maxTokens?: number;
   requireAvailability?: boolean;
-  /** Reasoning effort for reasoning-capable models (Private Cloud Compute). macOS 27+. */
+  /**
+   * Default reasoning effort for reasoning-capable models (Private Cloud Compute, macOS 27+).
+   * The AI SDK's portable per-call `reasoning` option takes precedence when set; a
+   * `providerOptions["apple-intelligence"].reasoningLevel` overrides both (AI SDK precedence
+   * rules — provider options are never merged with the portable option).
+   */
   reasoningLevel?: AppleIntelligenceReasoningLevel;
 };
 
@@ -49,16 +54,21 @@ export type AppleIntelligenceProviderSettings = {
 };
 
 /**
- * Build an empty {@link LanguageModelV3Usage}.
- *
- * Apple Intelligence runs on-device and does not report token counts, so every
- * field is `undefined`. The shape MUST be the nested LanguageModelV3/V4 usage
- * (`inputTokens.total`, `outputTokens.total`) — the AI SDK's `asLanguageModelUsage`
- * reads `usage.inputTokens.total`, so emitting the older flat shape
- * (`inputTokens: undefined`) throws "Cannot read properties of undefined". A fresh
- * object is returned per call so a consumer can never mutate shared state.
+ * Apple's on-device model runs best with a handful of tools — its 4096-token context window pays
+ * for every tool definition. Above this count the provider emits a warning (per Apple's
+ * "use tool calling efficiently" guidance of 3–5 tools per request).
  */
-function createEmptyUsage(): LanguageModelV3Usage {
+const RECOMMENDED_MAX_TOOLS = 5;
+
+/**
+ * Build an empty {@link LanguageModelV4Usage}.
+ *
+ * macOS 26 does not report token counts, so every field is `undefined`. The shape MUST be the
+ * nested usage (`inputTokens.total`, `outputTokens.total`) — the AI SDK's `asLanguageModelUsage`
+ * reads `usage.inputTokens.total`, so emitting a flat shape throws. A fresh object is returned
+ * per call so a consumer can never mutate shared state.
+ */
+function createEmptyUsage(): LanguageModelV4Usage {
   return {
     inputTokens: {
       total: undefined,
@@ -76,10 +86,10 @@ function createEmptyUsage(): LanguageModelV3Usage {
 
 /**
  * Map the native Apple Intelligence usage (macOS 27+ reports real token counts) onto the nested
- * {@link LanguageModelV3Usage} shape. Falls back to the all-`undefined` usage when the host reports
+ * {@link LanguageModelV4Usage} shape. Falls back to the all-`undefined` usage when the host reports
  * none (macOS 26, which does not surface per-call token counts).
  */
-function convertUsage(usage?: AppleIntelligenceUsage): LanguageModelV3Usage {
+function convertUsage(usage?: AppleIntelligenceUsage): LanguageModelV4Usage {
   if (!usage) {
     return createEmptyUsage();
   }
@@ -97,7 +107,69 @@ function convertUsage(usage?: AppleIntelligenceUsage): LanguageModelV3Usage {
       text,
       reasoning: usage.reasoningTokens,
     },
+    raw: {
+      inputTokens: usage.inputTokens,
+      cachedInputTokens: usage.cachedInputTokens,
+      outputTokens: usage.outputTokens,
+      reasoningTokens: usage.reasoningTokens,
+    },
   };
+}
+
+const STOP_FINISH: LanguageModelV4FinishReason = {
+  unified: "stop",
+  raw: "stop",
+};
+const TOOL_CALLS_FINISH: LanguageModelV4FinishReason = {
+  unified: "tool-calls",
+  raw: "tool-calls",
+};
+
+/** Guardrail violations and refusals surface as a `content-filter` finish, not a thrown error. */
+function contentFilterFinish(code: string): LanguageModelV4FinishReason {
+  return { unified: "content-filter", raw: code };
+}
+
+/**
+ * Map the AI SDK's portable `reasoning` effort onto Apple's `ContextOptions.ReasoningLevel`
+ * (`light` | `moderate` | `deep`). Apple exposes three levels, so `minimal` coerces up to `light`
+ * and `xhigh` down to `deep` — a compatibility warning is pushed when that happens.
+ * `provider-default` (or absence) falls back to the model settings' `reasoningLevel`.
+ */
+function resolveReasoningLevel(
+  reasoning: LanguageModelV4CallOptions["reasoning"],
+  settingsLevel: AppleIntelligenceReasoningLevel | undefined,
+  warnings: SharedV4Warning[]
+): string | undefined {
+  switch (reasoning) {
+    case undefined:
+    case "provider-default":
+      return settingsLevel;
+    case "none":
+      return "none";
+    case "minimal":
+      warnings.push({
+        type: "compatibility",
+        feature: "reasoning",
+        details: "Apple Intelligence has no 'minimal' level; using 'light'.",
+      });
+      return "light";
+    case "low":
+      return "light";
+    case "medium":
+      return "moderate";
+    case "high":
+      return "deep";
+    case "xhigh":
+      warnings.push({
+        type: "compatibility",
+        feature: "reasoning",
+        details: "Apple Intelligence has no 'xhigh' level; using 'deep'.",
+      });
+      return "deep";
+    default:
+      return settingsLevel;
+  }
 }
 
 function uint8ToBase64(bytes: Uint8Array): string {
@@ -122,9 +194,7 @@ function toAppleImage(
     return null;
   }
   if (data instanceof URL) {
-    return data.protocol === "file:"
-      ? { mediaType: type, fileURL: data.href }
-      : { mediaType: type, fileURL: data.href };
+    return { mediaType: type, fileURL: data.href };
   }
   if (typeof data === "string") {
     const dataUrl = /^data:[^;]+;base64,(.*)$/s.exec(data);
@@ -187,14 +257,25 @@ export function createAppleIntelligenceProvider(
   return provider;
 }
 
-export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
-  readonly specificationVersion = "v3";
+/** Everything a native call needs, resolved once per request from the V4 call options. */
+type ResolvedCall = {
+  messages: AppleIntelligenceMessage[];
+  tools?: AppleIntelligenceToolDefinition[];
+  toolChoice?: AppleIntelligenceToolChoice;
+  model: AppleIntelligenceModel;
+  reasoningLevel?: string;
+  temperature?: number;
+  maxTokens?: number;
+  topP?: number;
+  topK?: number;
+  seed?: number;
+  warnings: SharedV4Warning[];
+};
+
+export class AppleIntelligenceChatLanguageModel implements LanguageModelV4 {
+  readonly specificationVersion = "v4";
   readonly provider = "apple-intelligence";
   readonly modelId: string;
-  readonly defaultObjectGenerationMode = "json";
-
-  supportsImageUrls = true;
-  supportsStructuredOutputs = true;
 
   private readonly settings: AppleIntelligenceSettings;
   private readonly transport: AppleIntelligenceTransport;
@@ -213,221 +294,325 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
 
   /** Which native model backs this model id: `apple-private-cloud` → Private Cloud Compute. */
   private resolveModel(): AppleIntelligenceModel {
-    return this.modelId === "apple-private-cloud" ? "private-cloud" : "on-device";
+    return this.modelId === "apple-private-cloud"
+      ? "private-cloud"
+      : "on-device";
   }
 
-  supportedUrls:
-    | Record<string, RegExp[]>
-    | PromiseLike<Record<string, RegExp[]>> = {};
+  /**
+   * `file://` image URLs are handled natively (passed zero-copy to the FoundationModels
+   * attachment API), so the AI SDK must not download them. Everything else is downloaded by the
+   * SDK and arrives as bytes.
+   */
+  supportedUrls: Record<string, RegExp[]> = {
+    "image/*": [/^file:\/\/.+/],
+  };
 
   async doGenerate(
-    options: LanguageModelV3CallOptions
-  ): Promise<{
-    content: Array<LanguageModelV3Content>;
-    finishReason: LanguageModelV3FinishReason;
-    usage: LanguageModelV3Usage;
-    providerMetadata?: SharedV3ProviderMetadata;
-    request?: { body?: unknown };
-    response?: LanguageModelV3ResponseMetadata & {
-      headers?: SharedV3Headers;
-      body?: unknown;
-    };
-    warnings: Array<SharedV3Warning>;
-  }> {
+    options: LanguageModelV4CallOptions
+  ): Promise<LanguageModelV4GenerateResult> {
     await this.assertAvailability();
 
-    const isStructured =
-      options.responseFormat?.type === "json" &&
-      Boolean(options.responseFormat.schema);
+    const call = this.resolveCall(options);
 
-    if (isStructured) {
-      return this.handleStructuredGeneration(options);
+    const schema =
+      options.responseFormat?.type === "json"
+        ? (options.responseFormat.schema as JSONSchema7 | undefined)
+        : undefined;
+
+    if (schema) {
+      return this.generateStructured(call, schema);
     }
 
-    return this.handleRegularGeneration(options);
+    return this.generateRegular(call);
   }
 
   async doStream(
-    options: LanguageModelV3CallOptions
-  ): Promise<{ stream: ReadableStream<LanguageModelV3StreamPart> }> {
+    options: LanguageModelV4CallOptions
+  ): Promise<LanguageModelV4StreamResult> {
     await this.assertAvailability();
 
-    const messages = this.convertPromptToMessages(options.prompt);
-    const tools = options.tools?.length
-      ? this.convertTools(options.tools)
-      : undefined;
+    const call = this.resolveCall(options);
 
-    const model = this.resolveModel();
-    const reasoningLevel = this.settings.reasoningLevel;
+    const schema =
+      options.responseFormat?.type === "json"
+        ? (options.responseFormat.schema as JSONSchema7 | undefined)
+        : undefined;
 
-    const stream = tools?.length
-      ? this.createStreamFromEvents(
-          this.transport.stream({
-            messages,
-            tools,
-            model,
-            reasoningLevel,
-            temperature: this.settings.temperature,
-            maxTokens: options.maxOutputTokens ?? this.settings.maxTokens,
-            stopAfterToolCalls: true,
-            abortSignal: options.abortSignal,
-          })
-        )
-      : this.createStreamFromChunks(
-          this.transport.stream({
-            messages,
-            model,
-            reasoningLevel,
-            temperature: this.settings.temperature,
-            maxTokens: options.maxOutputTokens ?? this.settings.maxTokens,
-            abortSignal: options.abortSignal,
-          })
-        );
+    if (schema) {
+      // FoundationModels' guided generation has no incremental text stream over the FFI, so
+      // structured streaming (streamObject) is simulated from the non-streaming structured
+      // result: one stream, one delta carrying the full JSON.
+      return { stream: this.createSimulatedStructuredStream(call, schema) };
+    }
 
-    return { stream };
+    return {
+      stream: this.createStream(
+        this.transport.stream({
+          messages: call.messages,
+          tools: call.tools,
+          toolChoice: call.toolChoice,
+          model: call.model,
+          reasoningLevel: call.reasoningLevel,
+          temperature: call.temperature,
+          maxTokens: call.maxTokens,
+          topP: call.topP,
+          topK: call.topK,
+          seed: call.seed,
+          stopAfterToolCalls: call.tools?.length ? true : undefined,
+          abortSignal: options.abortSignal,
+        }),
+        call.warnings
+      ),
+    };
   }
 
-  supportsUrl?(_url: typeof URL): boolean {
-    return true;
-  }
-
-  private async assertAvailability(): Promise<AppleIntelligenceAvailability> {
+  private async assertAvailability(): Promise<void> {
     if (this.settings.requireAvailability === false) {
-      return { available: true, reason: "Skipped availability check" };
+      return;
     }
 
     const availability = await this.transport.checkAvailability();
     if (!availability.available) {
-      throw new Error(
-        `Apple Intelligence not available: ${availability.reason}`
-      );
+      throw new AppleIntelligenceGenerationError({
+        code: "unavailable",
+        message: `Apple Intelligence not available: ${availability.reason}`,
+      });
     }
-
-    return availability;
   }
 
-  private async handleStructuredGeneration(
-    options: LanguageModelV3CallOptions
-  ): Promise<{
-    content: Array<LanguageModelV3Content>;
-    finishReason: LanguageModelV3FinishReason;
-    usage: LanguageModelV3Usage;
-    warnings: Array<SharedV3Warning>;
-  }> {
-    const schema = options.responseFormat?.schema as JSONSchema7 | undefined;
-    if (!schema) {
-      throw new Error(
-        "Structured generation requires a JSON schema in responseFormat."
-      );
+  /** Resolve per-call settings, tools, and warnings from the V4 call options. */
+  private resolveCall(options: LanguageModelV4CallOptions): ResolvedCall {
+    const warnings: SharedV4Warning[] = [];
+
+    if (options.stopSequences?.length) {
+      warnings.push({
+        type: "unsupported",
+        feature: "stopSequences",
+        details: "Apple Intelligence does not support stop sequences.",
+      });
+    }
+    if (options.frequencyPenalty != null) {
+      warnings.push({ type: "unsupported", feature: "frequencyPenalty" });
+    }
+    if (options.presencePenalty != null) {
+      warnings.push({ type: "unsupported", feature: "presencePenalty" });
+    }
+    if (options.responseFormat?.type === "json" && !options.responseFormat.schema) {
+      warnings.push({
+        type: "unsupported",
+        feature: "responseFormat.json without schema",
+        details:
+          "Apple Intelligence guided generation requires a JSON schema; generating plain text.",
+      });
     }
 
-    const messages = this.convertPromptToMessages(options.prompt);
-    const result = await this.transport.generate({
-      messages,
-      schema,
-      model: this.resolveModel(),
-      reasoningLevel: this.settings.reasoningLevel,
-      temperature: this.settings.temperature,
-      maxTokens: options.maxOutputTokens ?? this.settings.maxTokens,
-    });
+    // Provider options (never merged with the portable `reasoning` option — they win outright).
+    const providerReasoningLevel =
+      typeof options.providerOptions?.["apple-intelligence"]?.reasoningLevel ===
+      "string"
+        ? (options.providerOptions["apple-intelligence"]
+            .reasoningLevel as string)
+        : undefined;
+    const reasoningLevel =
+      providerReasoningLevel ??
+      resolveReasoningLevel(
+        options.reasoning,
+        this.settings.reasoningLevel,
+        warnings
+      );
 
-    if (result.object !== undefined) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result.object),
-          },
-        ],
-        finishReason: { unified: "stop", raw: "stop" },
-        usage: convertUsage(result.usage),
-        warnings: [],
-      };
+    let tools = options.tools?.length
+      ? this.convertTools(options.tools, warnings)
+      : undefined;
+    let toolChoice: AppleIntelligenceToolChoice | undefined;
+
+    switch (options.toolChoice?.type) {
+      case "none":
+        // Omitting the tools entirely is the exact semantics of `none` for an on-device model —
+        // and saves their context-window cost.
+        tools = undefined;
+        break;
+      case "required":
+        toolChoice = "required";
+        break;
+      case "tool": {
+        const toolName = options.toolChoice.toolName;
+        tools = tools?.filter((tool) => tool.name === toolName);
+        if (!tools?.length) {
+          warnings.push({
+            type: "other",
+            message: `toolChoice requested tool "${toolName}" but it is not in the tools list.`,
+          });
+          tools = undefined;
+        }
+        toolChoice = "required";
+        break;
+      }
+      case "auto":
+      case undefined:
+        toolChoice = tools?.length ? "auto" : undefined;
+        break;
+    }
+
+    if (tools && tools.length > RECOMMENDED_MAX_TOOLS) {
+      warnings.push({
+        type: "other",
+        message: `${tools.length} tools provided; Apple recommends at most 3-5 tools per request — definitions consume the on-device model's 4096-token context window.`,
+      });
     }
 
     return {
-      content: [{ type: "text", text: result.text ?? "" }],
-      finishReason: { unified: "stop", raw: "stop" },
-      usage: convertUsage(result.usage),
-      warnings: [],
+      messages: this.convertPromptToMessages(options.prompt),
+      tools,
+      toolChoice,
+      model: this.resolveModel(),
+      reasoningLevel,
+      temperature: options.temperature ?? this.settings.temperature,
+      maxTokens: options.maxOutputTokens ?? this.settings.maxTokens,
+      topP: options.topP,
+      topK: options.topK,
+      seed: options.seed,
+      warnings,
     };
   }
 
-  private async handleRegularGeneration(
-    options: LanguageModelV3CallOptions
-  ): Promise<{
-    content: Array<LanguageModelV3Content>;
-    finishReason: LanguageModelV3FinishReason;
-    usage: LanguageModelV3Usage;
-    warnings: Array<SharedV3Warning>;
-  }> {
-    const messages = this.convertPromptToMessages(options.prompt);
-    const tools = options.tools?.length
-      ? this.convertTools(options.tools)
-      : undefined;
+  private async generateStructured(
+    call: ResolvedCall,
+    schema: JSONSchema7
+  ): Promise<LanguageModelV4GenerateResult> {
+    let result;
+    try {
+      result = await this.transport.generate({
+        messages: call.messages,
+        schema,
+        model: call.model,
+        reasoningLevel: call.reasoningLevel,
+        temperature: call.temperature,
+        maxTokens: call.maxTokens,
+        topP: call.topP,
+        topK: call.topK,
+        seed: call.seed,
+      });
+    } catch (error) {
+      return this.finishFromError(error, call.warnings);
+    }
 
-    const result = await this.transport.generate({
-      messages,
-      tools,
-      model: this.resolveModel(),
-      reasoningLevel: this.settings.reasoningLevel,
-      temperature: this.settings.temperature,
-      maxTokens: options.maxOutputTokens ?? this.settings.maxTokens,
-      stopAfterToolCalls: true,
-    });
+    const text =
+      result.object !== undefined
+        ? JSON.stringify(result.object)
+        : (result.text ?? "");
+
+    return {
+      content: [{ type: "text", text }],
+      finishReason: STOP_FINISH,
+      usage: convertUsage(result.usage),
+      warnings: call.warnings,
+    };
+  }
+
+  private async generateRegular(
+    call: ResolvedCall
+  ): Promise<LanguageModelV4GenerateResult> {
+    let result;
+    try {
+      result = await this.transport.generate({
+        messages: call.messages,
+        tools: call.tools,
+        toolChoice: call.toolChoice,
+        model: call.model,
+        reasoningLevel: call.reasoningLevel,
+        temperature: call.temperature,
+        maxTokens: call.maxTokens,
+        topP: call.topP,
+        topK: call.topK,
+        seed: call.seed,
+        stopAfterToolCalls: true,
+      });
+    } catch (error) {
+      return this.finishFromError(error, call.warnings);
+    }
 
     if (result.toolCalls?.length) {
-      const toolCallContent: LanguageModelV3Content[] = result.toolCalls.map(
-        (call) => ({
+      const toolCallContent: LanguageModelV4Content[] = result.toolCalls.map(
+        (toolCall) => ({
           type: "tool-call",
-          toolCallId: call.id,
-          toolName: call.function.name,
-          input: call.function.arguments,
+          toolCallId: toolCall.id,
+          toolName: toolCall.function.name,
+          input: toolCall.function.arguments,
         })
       );
 
       return {
         content: toolCallContent,
-        finishReason: { unified: "tool-calls", raw: "tool-calls" },
+        finishReason: TOOL_CALLS_FINISH,
         usage: convertUsage(result.usage),
-        warnings: [],
+        warnings: call.warnings,
       };
     }
 
     return {
       content: [{ type: "text", text: result.text ?? "" }],
-      finishReason: { unified: "stop", raw: "stop" },
+      finishReason: STOP_FINISH,
       usage: convertUsage(result.usage),
-      warnings: [],
+      warnings: call.warnings,
     };
   }
 
-  private convertTools(
-    tools: LanguageModelV3CallOptions["tools"]
-  ): AppleIntelligenceToolDefinition[] {
-    return tools
-      ? tools.map((tool) => {
-          if (tool.type !== "function") {
-            throw new Error(`Unsupported tool type: ${tool.type}`);
-          }
+  /**
+   * Content-filter outcomes (guardrail violations, refusals) are a finish reason in the AI SDK
+   * protocol — not a thrown error. Everything else (including `context-window-exceeded`, which
+   * callers should catch to condense the conversation and retry) rethrows typed.
+   */
+  private finishFromError(
+    error: unknown,
+    warnings: SharedV4Warning[]
+  ): LanguageModelV4GenerateResult {
+    if (
+      error instanceof AppleIntelligenceGenerationError &&
+      error.isContentFiltered
+    ) {
+      return {
+        content: [],
+        finishReason: contentFilterFinish(error.code),
+        usage: createEmptyUsage(),
+        warnings: [...warnings, { type: "other", message: error.message }],
+      };
+    }
+    throw error;
+  }
 
-          return {
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.inputSchema,
-          };
-        })
-      : [];
+  private convertTools(
+    tools: NonNullable<LanguageModelV4CallOptions["tools"]>,
+    warnings: SharedV4Warning[]
+  ): AppleIntelligenceToolDefinition[] {
+    const converted: AppleIntelligenceToolDefinition[] = [];
+    for (const tool of tools) {
+      if (tool.type !== "function") {
+        warnings.push({
+          type: "unsupported",
+          feature: `tool type: ${tool.type}`,
+          details: "Apple Intelligence supports function tools only.",
+        });
+        continue;
+      }
+      converted.push({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema as JSONSchema7,
+      });
+    }
+    return converted;
   }
 
   private convertPromptToMessages(
-    prompt: Parameters<LanguageModelV3["doGenerate"]>[0]["prompt"]
+    prompt: LanguageModelV4CallOptions["prompt"]
   ): AppleIntelligenceMessage[] {
     return prompt.map((message) => {
       switch (message.role) {
         case "system":
           return {
-            role: "system",
+            role: "system" as const,
             content: message.content,
           };
         case "user":
@@ -438,15 +623,15 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
           return this.convertToolMessage(message);
         default:
           return {
-            role: "user",
-            content: String(message.content ?? ""),
+            role: "user" as const,
+            content: String((message as { content?: unknown }).content ?? ""),
           };
       }
     });
   }
 
   private convertUserMessage(
-    message: Extract<LanguageModelV3Message, { role: "user" }>
+    message: Extract<LanguageModelV4Message, { role: "user" }>
   ): AppleIntelligenceMessage {
     if (!Array.isArray(message.content)) {
       return { role: "user", content: message.content };
@@ -477,7 +662,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
   }
 
   private convertAssistantMessage(
-    message: Extract<LanguageModelV3Message, { role: "assistant" }>
+    message: Extract<LanguageModelV4Message, { role: "assistant" }>
   ): AppleIntelligenceMessage {
     if (Array.isArray(message.content)) {
       const toolCalls = message.content.filter(
@@ -526,7 +711,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
   }
 
   private convertToolMessage(
-    message: Extract<LanguageModelV3Message, { role: "tool" }>
+    message: Extract<LanguageModelV4Message, { role: "tool" }>
   ): AppleIntelligenceMessage {
     const toolCalls = message.content
       .map((part) => {
@@ -571,7 +756,7 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
   }
 
   private formatToolResultOutput(
-    output: LanguageModelV3ToolResultOutput
+    output: LanguageModelV4ToolResultOutput
   ): string {
     switch (output.type) {
       case "text":
@@ -590,13 +775,16 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
             if (part.type === "text") {
               return part.text;
             }
-            if (part.type === "file-data") {
-              return `[file-data:${part.mediaType}]`;
+            if (part.type === "file") {
+              if (part.data.type === "text") {
+                return part.data.text;
+              }
+              if (part.data.type === "url") {
+                return `[file-url:${part.data.url}]`;
+              }
+              return `[file:${part.mediaType}]`;
             }
-            if (part.type === "file-url") {
-              return `[file-url:${part.url}]`;
-            }
-            return "[file]";
+            return "[unsupported content part]";
           })
           .join("\n");
       default:
@@ -604,18 +792,78 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
     }
   }
 
-  private createStreamFromEvents(
-    nativeStream: AsyncIterable<AppleIntelligenceStreamEvent>
-  ): ReadableStream<LanguageModelV3StreamPart> {
-    return new ReadableStream<LanguageModelV3StreamPart>({
+  /**
+   * Simulated structured stream: run the non-streaming guided generation, then emit its JSON as
+   * a single-delta text stream so `streamObject` consumers get a correct (if not incremental)
+   * result instead of schemaless free text.
+   */
+  private createSimulatedStructuredStream(
+    call: ResolvedCall,
+    schema: JSONSchema7
+  ): ReadableStream<LanguageModelV4StreamPart> {
+    const generate = () => this.generateStructured(call, schema);
+    const newId = this.generateId;
+    return new ReadableStream<LanguageModelV4StreamPart>({
       async start(controller) {
-        controller.enqueue({ type: "stream-start", warnings: [] });
-        const textId = crypto.randomUUID();
-        const reasoningId = crypto.randomUUID();
+        controller.enqueue({ type: "stream-start", warnings: call.warnings });
+        try {
+          const result = await generate();
+          const textId = newId();
+          for (const part of result.content) {
+            if (part.type === "text" && part.text.length > 0) {
+              controller.enqueue({ type: "text-start", id: textId });
+              controller.enqueue({
+                type: "text-delta",
+                id: textId,
+                delta: part.text,
+              });
+              controller.enqueue({ type: "text-end", id: textId });
+            }
+          }
+          controller.enqueue({
+            type: "finish",
+            finishReason: result.finishReason,
+            usage: result.usage,
+          });
+          controller.close();
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+    });
+  }
+
+  /**
+   * Adapt the native event stream onto the V4 stream-part protocol. Guardrail violations and
+   * refusals finish with `content-filter`; other typed errors (notably
+   * `context-window-exceeded`) error the stream with an
+   * {@link AppleIntelligenceGenerationError} the consumer can catch and act on.
+   */
+  private createStream(
+    nativeStream: AsyncIterable<AppleIntelligenceStreamEvent>,
+    warnings: SharedV4Warning[]
+  ): ReadableStream<LanguageModelV4StreamPart> {
+    const newId = this.generateId;
+    return new ReadableStream<LanguageModelV4StreamPart>({
+      async start(controller) {
+        controller.enqueue({ type: "stream-start", warnings });
+        const textId = newId();
+        const reasoningId = newId();
         let hasText = false;
         let hasReasoning = false;
         let hasToolCalls = false;
         let usage = createEmptyUsage();
+
+        const closeOpenBlocks = () => {
+          if (hasReasoning) {
+            controller.enqueue({ type: "reasoning-end", id: reasoningId });
+            hasReasoning = false;
+          }
+          if (hasText) {
+            controller.enqueue({ type: "text-end", id: textId });
+            hasText = false;
+          }
+        };
 
         try {
           for await (const event of nativeStream) {
@@ -631,7 +879,10 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
               });
             } else if (event.type === "reasoning") {
               if (!hasReasoning) {
-                controller.enqueue({ type: "reasoning-start", id: reasoningId });
+                controller.enqueue({
+                  type: "reasoning-start",
+                  id: reasoningId,
+                });
                 hasReasoning = true;
               }
               controller.enqueue({
@@ -650,89 +901,29 @@ export class AppleIntelligenceChatLanguageModel implements LanguageModelV3 {
             } else if (event.type === "usage") {
               usage = convertUsage(event.usage);
             } else if (event.type === "error") {
-              controller.error(new Error(event.message));
+              const error = new AppleIntelligenceGenerationError(event);
+              if (error.isContentFiltered) {
+                closeOpenBlocks();
+                controller.enqueue({
+                  type: "finish",
+                  finishReason: contentFilterFinish(error.code),
+                  usage,
+                });
+                controller.close();
+              } else {
+                controller.error(error);
+              }
               return;
             } else if (event.type === "done") {
               break;
             }
           }
 
-          if (hasReasoning) {
-            controller.enqueue({ type: "reasoning-end", id: reasoningId });
-          }
-          if (hasText) {
-            controller.enqueue({ type: "text-end", id: textId });
-          }
+          closeOpenBlocks();
 
           controller.enqueue({
             type: "finish",
-            finishReason: hasToolCalls
-              ? { unified: "tool-calls", raw: "tool-calls" }
-              : { unified: "stop", raw: "stop" },
-            usage,
-          });
-          controller.close();
-        } catch (err) {
-          controller.error(err);
-        }
-      },
-    });
-  }
-
-  private createStreamFromChunks(
-    stream: AsyncIterable<AppleIntelligenceStreamEvent>
-  ): ReadableStream<LanguageModelV3StreamPart> {
-    return new ReadableStream<LanguageModelV3StreamPart>({
-      async start(controller) {
-        controller.enqueue({ type: "stream-start", warnings: [] });
-        const textId = crypto.randomUUID();
-        const reasoningId = crypto.randomUUID();
-        let hasText = false;
-        let hasReasoning = false;
-        let usage = createEmptyUsage();
-
-        try {
-          for await (const event of stream) {
-            if (event.type === "text") {
-              if (!hasText) {
-                controller.enqueue({ type: "text-start", id: textId });
-                hasText = true;
-              }
-              controller.enqueue({
-                type: "text-delta",
-                delta: event.text,
-                id: textId,
-              });
-            } else if (event.type === "reasoning") {
-              if (!hasReasoning) {
-                controller.enqueue({ type: "reasoning-start", id: reasoningId });
-                hasReasoning = true;
-              }
-              controller.enqueue({
-                type: "reasoning-delta",
-                delta: event.text,
-                id: reasoningId,
-              });
-            } else if (event.type === "usage") {
-              usage = convertUsage(event.usage);
-            } else if (event.type === "error") {
-              controller.error(new Error(event.message));
-              return;
-            } else if (event.type === "done") {
-              break;
-            }
-          }
-
-          if (hasReasoning) {
-            controller.enqueue({ type: "reasoning-end", id: reasoningId });
-          }
-          if (hasText) {
-            controller.enqueue({ type: "text-end", id: textId });
-          }
-
-          controller.enqueue({
-            type: "finish",
-            finishReason: { unified: "stop", raw: "stop" },
+            finishReason: hasToolCalls ? TOOL_CALLS_FINISH : STOP_FINISH,
             usage,
           });
           controller.close();

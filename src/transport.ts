@@ -15,6 +15,105 @@ export type AppleIntelligenceReasoningLevel =
   | (string & {});
 
 /**
+ * Tool choice for a generation: `auto` lets the model decide (default), `required` forces at least
+ * one tool call, `none` forbids tool calls. Mapped onto `GenerationOptions.ToolCallingMode` on
+ * macOS 27+; best-effort on macOS 26.
+ */
+export type AppleIntelligenceToolChoice = "auto" | "required" | "none";
+
+/**
+ * Stable machine-readable codes for generation failures, mirroring the FoundationModels error
+ * cases (`LanguageModelError` on macOS 27+, `LanguageModelSession.GenerationError` on macOS 26).
+ * `context-window-exceeded` is the one Apple's context-window guidance tells apps to handle:
+ * condense the conversation (or start fresh) and retry in a new request.
+ */
+export type AppleIntelligenceErrorCode =
+  | "context-window-exceeded"
+  | "guardrail-violation"
+  | "refusal"
+  | "rate-limited"
+  | "concurrent-requests"
+  | "assets-unavailable"
+  | "decoding-failure"
+  | "unsupported-guide"
+  | "unsupported-language"
+  | "unsupported-capability"
+  | "unsupported-transcript-content"
+  | "timeout"
+  | "tool-call-error"
+  | "unavailable"
+  | "invalid-json"
+  | "no-messages"
+  | "unknown"
+  | (string & {});
+
+/**
+ * A typed generation failure. `code` distinguishes context-window overflow from guardrail
+ * violations, refusals, rate limits, etc., so callers can implement the documented recovery
+ * strategies instead of string-matching messages. For `context-window-exceeded`, `contextSize`
+ * and `tokenCount` carry the model's window and the offending prompt size (macOS 27+).
+ */
+export class AppleIntelligenceGenerationError extends Error {
+  readonly code: AppleIntelligenceErrorCode;
+  readonly contextSize?: number;
+  readonly tokenCount?: number;
+
+  constructor(options: {
+    code: AppleIntelligenceErrorCode;
+    message: string;
+    contextSize?: number;
+    tokenCount?: number;
+  }) {
+    super(options.message);
+    this.name = "AppleIntelligenceGenerationError";
+    this.code = options.code;
+    this.contextSize = options.contextSize;
+    this.tokenCount = options.tokenCount;
+  }
+
+  get isContextWindowExceeded(): boolean {
+    return this.code === "context-window-exceeded";
+  }
+
+  /** Guardrail violations and refusals — content the model (or system) declined to produce. */
+  get isContentFiltered(): boolean {
+    return this.code === "guardrail-violation" || this.code === "refusal";
+  }
+}
+
+/**
+ * Normalize an unknown rejection (e.g. a Tauri `invoke` error payload — the serialized
+ * `AppleAIError` from the Rust plugin) into a typed error. Typed `generation` failures become
+ * {@link AppleIntelligenceGenerationError}; everything else becomes a plain `Error`.
+ */
+export function toAppleIntelligenceError(reason: unknown): Error {
+  if (reason instanceof Error) {
+    return reason;
+  }
+  if (typeof reason === "object" && reason !== null) {
+    const payload = reason as {
+      type?: string;
+      code?: string;
+      message?: string;
+      contextSize?: number;
+      tokenCount?: number;
+    };
+    if (payload.type === "generation" && payload.code) {
+      return new AppleIntelligenceGenerationError({
+        code: payload.code,
+        message: payload.message ?? "Generation failed",
+        contextSize: payload.contextSize,
+        tokenCount: payload.tokenCount,
+      });
+    }
+    if (typeof payload.message === "string") {
+      return new Error(payload.message);
+    }
+  }
+  return new Error(String(reason));
+}
+
+/**
  * An image attached to a user turn (multimodal input, macOS 27+). Provide either a `fileURL`
  * (a path or `file://` URL — preferred, zero-copy) or inline `base64` bytes.
  */
@@ -85,6 +184,13 @@ export type AppleIntelligenceGenerateOptions = {
   reasoningLevel?: AppleIntelligenceReasoningLevel;
   temperature?: number;
   maxTokens?: number;
+  /** Nucleus sampling threshold → `GenerationOptions.SamplingMode.random(probabilityThreshold:)`. */
+  topP?: number;
+  /** Top-k sampling → `GenerationOptions.SamplingMode.random(top:)`. Wins over `topP`. */
+  topK?: number;
+  /** Sampling seed for reproducible generations. */
+  seed?: number;
+  toolChoice?: AppleIntelligenceToolChoice;
   stopAfterToolCalls?: boolean;
 };
 
@@ -106,7 +212,13 @@ export type AppleIntelligenceStreamEvent =
     }
   | { type: "usage"; usage: AppleIntelligenceUsage }
   | { type: "done" }
-  | { type: "error"; message: string };
+  | {
+      type: "error";
+      code: AppleIntelligenceErrorCode;
+      message: string;
+      contextSize?: number;
+      tokenCount?: number;
+    };
 
 export type AppleIntelligenceStreamOptions = {
   messages: AppleIntelligenceMessage[];
@@ -115,6 +227,13 @@ export type AppleIntelligenceStreamOptions = {
   reasoningLevel?: AppleIntelligenceReasoningLevel;
   temperature?: number;
   maxTokens?: number;
+  /** Nucleus sampling threshold → `GenerationOptions.SamplingMode.random(probabilityThreshold:)`. */
+  topP?: number;
+  /** Top-k sampling → `GenerationOptions.SamplingMode.random(top:)`. Wins over `topP`. */
+  topK?: number;
+  /** Sampling seed for reproducible generations. */
+  seed?: number;
+  toolChoice?: AppleIntelligenceToolChoice;
   stopAfterToolCalls?: boolean;
   /**
    * Aborting this signal cancels the in-flight on-device generation (the transport calls the
@@ -136,10 +255,27 @@ export interface AppleIntelligenceTransport {
   getContextInfo?(
     model?: AppleIntelligenceModel
   ): Promise<AppleIntelligenceContextInfo>;
+  /**
+   * Token count for `text` measured by the on-device model's tokenizer
+   * (`SystemLanguageModel.tokenCount(for:)`, macOS 26.4+). Combine with `getContextInfo` to
+   * budget prompts against the real context window before sending them. Resolves to `-2` when
+   * the OS is too old and `-1` when the count can't be determined.
+   */
+  tokenCount?(
+    text: string,
+    model?: AppleIntelligenceModel
+  ): Promise<number>;
   /** BCP-47 language tags the on-device model supports (e.g. `["en", "fr", "zh-Hans"]`). */
   getSupportedLanguages?(): Promise<string[]>;
-  /** Prewarm a model to reduce first-token latency on the next request. Best-effort. */
-  prewarm?(model?: AppleIntelligenceModel): Promise<void>;
+  /**
+   * Prewarm a model to reduce first-token latency on the next request. Best-effort.
+   * `promptPrefix` optionally lets the system eagerly process a known prefix of the upcoming
+   * prompt (e.g. the system instructions) for a further latency win.
+   */
+  prewarm?(
+    model?: AppleIntelligenceModel,
+    promptPrefix?: string
+  ): Promise<void>;
   generate(
     options: AppleIntelligenceGenerateOptions
   ): Promise<AppleIntelligenceGenerateResult>;
