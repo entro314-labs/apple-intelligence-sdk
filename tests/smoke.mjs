@@ -214,4 +214,32 @@ function makeTransport(overrides = {}) {
   console.log("8 toolChoice + tool-count warning OK");
 }
 
+// 9. toAppleIntelligenceError: host command-error envelopes ({type:'System', data}) and unknown
+// object payloads must never degrade to "[object Object]", and a stringified plugin
+// `[code] message` Display is recovered as a typed generation error.
+{
+  const { toAppleIntelligenceError } = await import("../dist/index.mjs");
+
+  const typed = toAppleIntelligenceError({
+    type: "System",
+    data: "[assets-unavailable] The operation couldn’t be completed.",
+  });
+  assert.ok(typed instanceof AppleIntelligenceGenerationError, "envelope with [code] prefix must be typed");
+  assert.equal(typed.code, "assets-unavailable");
+  assert.equal(typed.message, "The operation couldn’t be completed.");
+
+  const plain = toAppleIntelligenceError({ type: "System", data: "dylib exploded" });
+  assert.equal(plain.message, "dylib exploded");
+  assert.ok(!(plain instanceof AppleIntelligenceGenerationError));
+
+  const stringReason = toAppleIntelligenceError("[stream-busy] a stream is already active");
+  assert.ok(stringReason instanceof AppleIntelligenceGenerationError);
+  assert.equal(stringReason.code, "stream-busy");
+
+  const unknownShape = toAppleIntelligenceError({ weird: true, nested: { n: 1 } });
+  assert.ok(!unknownShape.message.includes("[object Object]"), "must not stringify to [object Object]");
+  assert.ok(unknownShape.message.includes('"weird":true'), "unknown shapes are JSON-stringified");
+  console.log("9 toAppleIntelligenceError normalization OK");
+}
+
 console.log("\nAll smoke tests passed.");

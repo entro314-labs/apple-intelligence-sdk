@@ -78,9 +78,16 @@ export function createTauriAppleIntelligenceTransport(
     ): AsyncIterable<AppleIntelligenceStreamEvent> {
       // The abort signal stays on this side of the IPC boundary — it is not serializable.
       const { abortSignal, ...payload } = request;
-      const start = await invoke<StreamStart>(command("stream"), {
-        request: payload,
-      });
+      let start: StreamStart;
+      try {
+        start = await invoke<StreamStart>(command("stream"), {
+          request: payload,
+        });
+      } catch (reason) {
+        // Same normalization as generate(): surface typed failures (stream-busy, host
+        // command-error envelopes) instead of the raw serialized rejection.
+        throw toAppleIntelligenceError(reason);
+      }
 
       // Abort → host-side cancel. The cancelled stream still terminates through its normal
       // `done` event (emitted by the native cancellation handler), which ends the iterator and

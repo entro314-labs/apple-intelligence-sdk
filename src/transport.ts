@@ -82,19 +82,43 @@ export class AppleIntelligenceGenerationError extends Error {
 }
 
 /**
+ * The Rust plugin's `AppleAIError::Generation` Displays as `"[{code}] {message}"`. Host apps that
+ * wrap plugin errors in their own command-error type (e.g. `{type: 'System', data: error.to_string()}`)
+ * flatten the typed failure into that string — recover it so callers still get a typed
+ * {@link AppleIntelligenceGenerationError} with the machine-readable code.
+ */
+function parseDisplayedGenerationError(text: string): Error | null {
+  const match = /\[([a-z][a-z0-9-]*)\]\s+(.+)/s.exec(text);
+  if (!match) {
+    return null;
+  }
+  return new AppleIntelligenceGenerationError({
+    code: match[1],
+    message: match[2],
+  });
+}
+
+/**
  * Normalize an unknown rejection (e.g. a Tauri `invoke` error payload — the serialized
  * `AppleAIError` from the Rust plugin) into a typed error. Typed `generation` failures become
- * {@link AppleIntelligenceGenerationError}; everything else becomes a plain `Error`.
+ * {@link AppleIntelligenceGenerationError}; everything else becomes a plain `Error`. Host
+ * command-error envelopes carrying the failure as a `data` string (and stringified `[code]`
+ * prefixes inside it) are unwrapped rather than degrading to `String(object)` →
+ * `"[object Object]"`.
  */
 export function toAppleIntelligenceError(reason: unknown): Error {
   if (reason instanceof Error) {
     return reason;
+  }
+  if (typeof reason === "string") {
+    return parseDisplayedGenerationError(reason) ?? new Error(reason);
   }
   if (typeof reason === "object" && reason !== null) {
     const payload = reason as {
       type?: string;
       code?: string;
       message?: string;
+      data?: unknown;
       contextSize?: number;
       tokenCount?: number;
     };
@@ -107,7 +131,24 @@ export function toAppleIntelligenceError(reason: unknown): Error {
       });
     }
     if (typeof payload.message === "string") {
-      return new Error(payload.message);
+      return (
+        parseDisplayedGenerationError(payload.message) ??
+        new Error(payload.message)
+      );
+    }
+    // Host command-error envelopes (e.g. anasa's `CommandError`) serialize as
+    // `{type: 'System', data: '<plugin error string>'}` — surface the string.
+    if (typeof payload.data === "string") {
+      return (
+        parseDisplayedGenerationError(payload.data) ?? new Error(payload.data)
+      );
+    }
+  }
+  if (typeof reason === "object" && reason !== null) {
+    try {
+      return new Error(JSON.stringify(reason));
+    } catch {
+      // Circular payload — fall through to String().
     }
   }
   return new Error(String(reason));
