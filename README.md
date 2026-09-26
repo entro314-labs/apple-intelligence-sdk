@@ -1,5 +1,32 @@
 # Apple Intelligence SDK (Transport-Agnostic)
 
+> [!WARNING]
+> **Deprecated.** This package is no longer maintained. It has been merged into
+> [`tauri-plugin-apple-intelligence`](https://github.com/entro314-labs/tauri-plugin-apple-intelligence),
+> whose npm package is [`@entro314labs/plugin-apple-intelligence`](https://www.npmjs.com/package/@entro314labs/plugin-apple-intelligence).
+
+## Migrating
+
+```bash
+pnpm remove @entro314labs/apple-intelligence-sdk
+pnpm add @entro314labs/plugin-apple-intelligence
+```
+
+```diff
+- import { createAppleIntelligenceProvider, createTauriAppleIntelligenceTransport } from "@entro314labs/apple-intelligence-sdk";
++ import { createAppleIntelligenceProvider, createTauriAppleIntelligenceTransport } from "@entro314labs/plugin-apple-intelligence";
+```
+
+The exports are the same, except `createTauriAppleIntelligenceTransport()` no longer takes a
+`commandPrefix` option (and `TauriAppleIntelligenceTransportOptions` is gone): the transport calls
+the plugin's namespaced `plugin:apple-intelligence|*` commands. The Rust side must move from the
+`tauri-apple-intelligence` crate to `tauri-plugin-apple-intelligence` at the same time — see the
+plugin's [Setup](https://github.com/entro314-labs/tauri-plugin-apple-intelligence#setup).
+
+The original documentation follows for users pinned to 0.6.x.
+
+---
+
 This package provides a **Vercel AI SDK v7 provider** (`LanguageModelV4` spec) for Apple Intelligence using a **pluggable transport**. It does **not** ship any native binaries.
 
 Companion Tauri bridge crate: https://github.com/entro314-labs/tauri-apple-intelligence
